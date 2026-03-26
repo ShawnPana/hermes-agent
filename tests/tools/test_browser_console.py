@@ -57,8 +57,8 @@ class TestBrowserConsole:
 
         calls = mock_cmd.call_args_list
         # Both console and errors should get --clear
-        assert calls[0][0] == ("test", "console", ["--clear"])
-        assert calls[1][0] == ("test", "errors", ["--clear"])
+        assert calls[0][0][:3] == ("test", "console", ["--clear"])
+        assert calls[1][0][:3] == ("test", "errors", ["--clear"])
 
     def test_no_clear_by_default(self):
         from tools.browser_tool import browser_console
@@ -68,8 +68,8 @@ class TestBrowserConsole:
             browser_console(task_id="test")
 
         calls = mock_cmd.call_args_list
-        assert calls[0][0] == ("test", "console", [])
-        assert calls[1][0] == ("test", "errors", [])
+        assert calls[0][0][:3] == ("test", "console", [])
+        assert calls[1][0][:3] == ("test", "errors", [])
 
     def test_empty_console_and_errors(self):
         from tools.browser_tool import browser_console

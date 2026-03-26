@@ -63,7 +63,7 @@ from .skill_manager_tool import (
     SKILL_MANAGE_SCHEMA
 )
 
-# Browser automation tools (agent-browser + Browserbase)
+# Browser automation tools (agent-browser/browser-use + cloud providers)
 from .browser_tool import (
     browser_navigate,
     browser_snapshot,

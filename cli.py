@@ -4181,7 +4181,11 @@ class HermesCLI:
             elif os.environ.get("BROWSERBASE_API_KEY"):
                 print("🌐 Browser: Browserbase (cloud)")
             else:
-                print("🌐 Browser: local headless Chromium (agent-browser)")
+                try:
+                    from tools.browser_tool import _get_backend
+                    print(f"🌐 Browser: local headless Chromium ({_get_backend().cli_name})")
+                except Exception:
+                    print("🌐 Browser: local headless Chromium")
             print()
             print("   /browser connect      — connect to your live Chrome")
             print("   /browser disconnect   — revert to default")

@@ -2,23 +2,20 @@
 """
 Browser Tool Module
 
-This module provides browser automation tools using agent-browser CLI.  It
-supports two backends — **Browserbase** (cloud) and **local Chromium** — with
-identical agent-facing behaviour.  The backend is auto-detected: if
-``BROWSERBASE_API_KEY`` is set the cloud service is used; otherwise a local
-headless Chromium instance is launched automatically.
-
-The tool uses agent-browser's accessibility tree (ariaSnapshot) for text-based
-page representation, making it ideal for LLM agents without vision capabilities.
+This module provides browser automation tools using a configurable CLI backend
+(``agent-browser`` or ``browser-use``).  It supports cloud providers
+(**Browserbase**, **Browser Use Cloud**) and local Chromium, with identical
+agent-facing behaviour.  The backend is selected via
+``config["browser"]["cli_backend"]`` (default: ``agent-browser``).
 
 Features:
-- **Local mode** (default): zero-cost headless Chromium via agent-browser.
-  Works on Linux servers without a display.  One-time setup:
-  ``agent-browser install`` (downloads Chromium) or
-  ``agent-browser install --with-deps`` (also installs system libraries for
-  Debian/Ubuntu/Docker).
-- **Cloud mode**: Browserbase cloud execution with stealth features, proxies,
-  and CAPTCHA solving.  Activated when BROWSERBASE_API_KEY is set.
+- **Local mode** (default): zero-cost headless Chromium driven by the
+  configured CLI backend.  Works on Linux servers without a display.
+  One-time setup depends on the backend:
+  - ``agent-browser``: ``npm install -g agent-browser && agent-browser install``
+  - ``browser-use``: ``curl -fsSL https://browser-use.com/cli/install_lite.sh | bash``
+- **Cloud mode**: Browserbase or Browser Use Cloud execution with stealth
+  features, proxies, and CAPTCHA solving.  Activated via cloud_provider config.
 - Session isolation per task ID
 - Text-based page snapshots using accessibility tree
 - Element interaction via ref selectors (@e1, @e2, etc.)
@@ -78,6 +75,12 @@ except Exception:
 from tools.browser_providers.base import CloudBrowserProvider
 from tools.browser_providers.browserbase import BrowserbaseProvider
 from tools.browser_providers.browser_use import BrowserUseProvider
+from tools.browser_providers.local_cli import (
+    BrowserBackend,
+    AgentBrowserBackend,
+    BrowserUseBackend,
+    CLI_BACKEND_REGISTRY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -257,11 +260,48 @@ def _get_cloud_provider() -> Optional[CloudBrowserProvider]:
     return _cached_cloud_provider
 
 
+# ============================================================================
+# Local CLI Backend Registry
+# ============================================================================
+
+_cached_backend: Optional[BrowserBackend] = None
+_backend_resolved = False
+
+
+def _get_backend() -> BrowserBackend:
+    """Return the configured local CLI backend.
+
+    Reads ``config["browser"]["cli_backend"]`` once and caches the result.
+    Default is ``"agent-browser"`` for backward compatibility.
+    """
+    global _cached_backend, _backend_resolved
+    if _backend_resolved:
+        return _cached_backend  # type: ignore[return-value]
+
+    _backend_resolved = True
+    backend_key = "agent-browser"  # default
+    try:
+        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        config_path = hermes_home / "config.yaml"
+        if config_path.exists():
+            import yaml
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f) or {}
+            key = cfg.get("browser", {}).get("cli_backend")
+            if key and key in CLI_BACKEND_REGISTRY:
+                backend_key = key
+    except Exception as e:
+        logger.debug("Could not read cli_backend from config: %s", e)
+
+    _cached_backend = CLI_BACKEND_REGISTRY[backend_key]()
+    return _cached_backend
+
+
 def _socket_safe_tmpdir() -> str:
     """Return a short temp directory path suitable for Unix domain sockets.
 
     macOS sets ``TMPDIR`` to ``/var/folders/xx/.../T/`` (~51 chars).  When we
-    append ``agent-browser-hermes_…`` the resulting socket path exceeds the
+    append ``{cli_name}-hermes_…`` the resulting socket path exceeds the
     104-byte macOS limit for ``AF_UNIX`` addresses, causing agent-browser to
     fail with "Failed to create socket directory" or silent screenshot failures.
 
@@ -669,61 +709,19 @@ def _get_session_info(task_id: Optional[str] = None) -> Dict[str, str]:
 
 
 def _find_agent_browser() -> str:
-    """
-    Find the agent-browser CLI executable.
-    
-    Checks in order: current PATH, Homebrew/common bin dirs, Hermes-managed
-    node, local node_modules/.bin/, npx fallback.
-    
+    """Find the configured browser CLI executable.
+
+    Delegates to the active backend's ``find_cli()`` method.
+    Kept as a module-level function for backward compatibility with tests
+    and external code that imports it directly.
+
     Returns:
-        Path to agent-browser executable
-        
+        Path to CLI executable
+
     Raises:
-        FileNotFoundError: If agent-browser is not installed
+        FileNotFoundError: If the CLI is not installed
     """
-
-    # Check if it's in PATH (global install)
-    which_result = shutil.which("agent-browser")
-    if which_result:
-        return which_result
-
-    # Build an extended search PATH including Homebrew and Hermes-managed dirs.
-    # This covers macOS where the process PATH may not include Homebrew paths.
-    extra_dirs: list[str] = []
-    for d in ["/opt/homebrew/bin", "/usr/local/bin"]:
-        if os.path.isdir(d):
-            extra_dirs.append(d)
-    extra_dirs.extend(_discover_homebrew_node_dirs())
-
-    hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
-    hermes_node_bin = str(hermes_home / "node" / "bin")
-    if os.path.isdir(hermes_node_bin):
-        extra_dirs.append(hermes_node_bin)
-
-    if extra_dirs:
-        extended_path = os.pathsep.join(extra_dirs)
-        which_result = shutil.which("agent-browser", path=extended_path)
-        if which_result:
-            return which_result
-
-    # Check local node_modules/.bin/ (npm install in repo root)
-    repo_root = Path(__file__).parent.parent
-    local_bin = repo_root / "node_modules" / ".bin" / "agent-browser"
-    if local_bin.exists():
-        return str(local_bin)
-    
-    # Check common npx locations (also search extended dirs)
-    npx_path = shutil.which("npx")
-    if not npx_path and extra_dirs:
-        npx_path = shutil.which("npx", path=os.pathsep.join(extra_dirs))
-    if npx_path:
-        return "npx agent-browser"
-    
-    raise FileNotFoundError(
-        "agent-browser CLI not found. Install it with: npm install -g agent-browser\n"
-        "Or run 'npm install' in the repo root to install locally.\n"
-        "Or ensure npx is available in your PATH."
-    )
+    return _get_backend().find_cli()
 
 
 def _extract_screenshot_path_from_text(text: str) -> Optional[str]:
@@ -754,7 +752,7 @@ def _run_browser_command(
     timeout: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Run an agent-browser CLI command using our pre-created Browserbase session.
+    Run a browser CLI command via the configured backend.
     
     Args:
         task_id: Task identifier to get the right session
@@ -764,17 +762,18 @@ def _run_browser_command(
                  ``browser.command_timeout`` from config (default 30s).
         
     Returns:
-        Parsed JSON response from agent-browser
+        Parsed JSON response from the browser CLI
     """
     if timeout is None:
         timeout = _get_command_timeout()
     args = args or []
     
     # Build the command
+    backend = _get_backend()
     try:
         browser_cmd = _find_agent_browser()
     except FileNotFoundError as e:
-        logger.warning("agent-browser CLI not found: %s", e)
+        logger.warning("%s CLI not found: %s", backend.cli_name, e)
         return {"success": False, "error": str(e)}
     
     from tools.interrupt import is_interrupted
@@ -793,10 +792,10 @@ def _run_browser_command(
     # Local mode: --session <name> launches a local headless Chromium.
     # The rest of the command (--json, command, args) is identical.
     if session_info.get("cdp_url"):
-        # Cloud mode — connect to remote Browserbase browser via CDP
+        # Cloud mode — connect to remote browser via CDP
         # IMPORTANT: Do NOT use --session with --cdp. In agent-browser >=0.13,
         # --session creates a local browser instance and silently ignores --cdp.
-        backend_args = ["--cdp", session_info["cdp_url"]]
+        backend_args = [backend.cdp_flag(), session_info["cdp_url"]]
     else:
         # Local mode — launch a headless Chromium instance
         backend_args = ["--session", session_info["session_name"]]
@@ -812,7 +811,7 @@ def _run_browser_command(
         # causing "Failed to create socket directory: Permission denied" errors.
         task_socket_dir = os.path.join(
             _socket_safe_tmpdir(),
-            f"agent-browser-{session_info['session_name']}"
+            f"{backend.cli_name}-{session_info['session_name']}"
         )
         os.makedirs(task_socket_dir, mode=0o700, exist_ok=True)
         logger.debug("browser cmd=%s task=%s socket_dir=%s (%d chars)",
@@ -935,7 +934,7 @@ def _run_browser_command(
 
                 return {
                     "success": False,
-                    "error": f"Non-JSON output from agent-browser for '{command}': {raw}"
+                    "error": f"Non-JSON output from {backend.cli_name} for '{command}': {raw}"
                 }
         
         # Check for errors
@@ -1058,8 +1057,8 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
         session_info["_first_nav"] = False
         _maybe_start_recording(effective_task_id)
     
-    result = _run_browser_command(effective_task_id, "open", [url], timeout=max(_get_command_timeout(), 60))
-    
+    result = _get_backend().navigate(url, effective_task_id)
+
     if result.get("success"):
         data = result.get("data", {})
         title = data.get("title", "")
@@ -1136,13 +1135,8 @@ def browser_snapshot(
         JSON string with page snapshot
     """
     effective_task_id = task_id or "default"
-    
-    # Build command args based on full flag
-    args = []
-    if not full:
-        args.extend(["-c"])  # Compact mode
-    
-    result = _run_browser_command(effective_task_id, "snapshot", args)
+
+    result = _get_backend().snapshot(full, effective_task_id)
     
     if result.get("success"):
         data = result.get("data", {})
@@ -1181,13 +1175,9 @@ def browser_click(ref: str, task_id: Optional[str] = None) -> str:
         JSON string with click result
     """
     effective_task_id = task_id or "default"
-    
-    # Ensure ref starts with @
-    if not ref.startswith("@"):
-        ref = f"@{ref}"
-    
-    result = _run_browser_command(effective_task_id, "click", [ref])
-    
+
+    result = _get_backend().click(ref, effective_task_id)
+
     if result.get("success"):
         return json.dumps({
             "success": True,
@@ -1203,23 +1193,18 @@ def browser_click(ref: str, task_id: Optional[str] = None) -> str:
 def browser_type(ref: str, text: str, task_id: Optional[str] = None) -> str:
     """
     Type text into an input field.
-    
+
     Args:
         ref: Element reference (e.g., "@e3")
         text: Text to type
         task_id: Task identifier for session isolation
-        
+
     Returns:
         JSON string with type result
     """
     effective_task_id = task_id or "default"
-    
-    # Ensure ref starts with @
-    if not ref.startswith("@"):
-        ref = f"@{ref}"
-    
-    # Use fill command (clears then types)
-    result = _run_browser_command(effective_task_id, "fill", [ref, text])
+
+    result = _get_backend().type_text(ref, text, effective_task_id)
     
     if result.get("success"):
         return json.dumps({
@@ -1254,8 +1239,8 @@ def browser_scroll(direction: str, task_id: Optional[str] = None) -> str:
             "error": f"Invalid direction '{direction}'. Use 'up' or 'down'."
         }, ensure_ascii=False)
     
-    result = _run_browser_command(effective_task_id, "scroll", [direction])
-    
+    result = _get_backend().scroll(direction, effective_task_id)
+
     if result.get("success"):
         return json.dumps({
             "success": True,
@@ -1271,15 +1256,15 @@ def browser_scroll(direction: str, task_id: Optional[str] = None) -> str:
 def browser_back(task_id: Optional[str] = None) -> str:
     """
     Navigate back in browser history.
-    
+
     Args:
         task_id: Task identifier for session isolation
-        
+
     Returns:
         JSON string with navigation result
     """
     effective_task_id = task_id or "default"
-    result = _run_browser_command(effective_task_id, "back", [])
+    result = _get_backend().back(effective_task_id)
     
     if result.get("success"):
         data = result.get("data", {})
@@ -1306,7 +1291,7 @@ def browser_press(key: str, task_id: Optional[str] = None) -> str:
         JSON string with key press result
     """
     effective_task_id = task_id or "default"
-    result = _run_browser_command(effective_task_id, "press", [key])
+    result = _get_backend().press_key(key, effective_task_id)
     
     if result.get("success"):
         return json.dumps({
@@ -1359,30 +1344,16 @@ def browser_console(clear: bool = False, task_id: Optional[str] = None) -> str:
         JSON string with console messages and JS errors
     """
     effective_task_id = task_id or "default"
-    
-    console_args = ["--clear"] if clear else []
-    error_args = ["--clear"] if clear else []
-    
-    console_result = _run_browser_command(effective_task_id, "console", console_args)
-    errors_result = _run_browser_command(effective_task_id, "errors", error_args)
-    
+
+    result = _get_backend().console(clear, effective_task_id)
+
     messages = []
-    if console_result.get("success"):
-        for msg in console_result.get("data", {}).get("messages", []):
-            messages.append({
-                "type": msg.get("type", "log"),
-                "text": msg.get("text", ""),
-                "source": "console",
-            })
-    
     errors = []
-    if errors_result.get("success"):
-        for err in errors_result.get("data", {}).get("errors", []):
-            errors.append({
-                "message": err.get("message", ""),
-                "source": "exception",
-            })
-    
+    if result.get("success"):
+        data = result.get("data", {})
+        messages = data.get("messages", [])
+        errors = data.get("errors", [])
+
     return json.dumps({
         "success": True,
         "console_messages": messages,
@@ -1464,7 +1435,7 @@ def browser_get_images(task_id: Optional[str] = None) -> str:
         })).filter(img => img.src && !img.src.startsWith('data:'))
     )"""
     
-    result = _run_browser_command(effective_task_id, "eval", [js_code])
+    result = _get_backend().eval_js(js_code, effective_task_id)
     
     if result.get("success"):
         data = result.get("data", {})
@@ -1533,16 +1504,12 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
         # Prune old screenshots (older than 24 hours) to prevent unbounded disk growth
         _cleanup_old_screenshots(screenshots_dir, max_age_hours=24)
         
-        # Take screenshot using agent-browser
-        screenshot_args = []
-        if annotate:
-            screenshot_args.append("--annotate")
-        screenshot_args.append("--full")
-        screenshot_args.append(str(screenshot_path))
-        result = _run_browser_command(
-            effective_task_id, 
-            "screenshot", 
-            screenshot_args,
+        # Take screenshot using the configured browser backend
+        result = _get_backend().screenshot(
+            path=str(screenshot_path),
+            annotate=annotate,
+            full=True,
+            task_id=effective_task_id,
         )
         
         if not result.get("success"):
@@ -1746,7 +1713,8 @@ def cleanup_browser(task_id: Optional[str] = None) -> None:
         # Kill the daemon process and clean up socket directory
         session_name = session_info.get("session_name", "")
         if session_name:
-            socket_dir = os.path.join(_socket_safe_tmpdir(), f"agent-browser-{session_name}")
+            backend = _get_backend()
+            socket_dir = os.path.join(_socket_safe_tmpdir(), f"{backend.cli_name}-{session_name}")
             if os.path.exists(socket_dir):
                 # agent-browser writes {session}.pid in the socket dir
                 pid_file = os.path.join(socket_dir, f"{session_name}.pid")
@@ -1795,19 +1763,14 @@ def check_browser_requirements() -> bool:
     """
     Check if browser tool requirements are met.
 
-    In **local mode** (no Browserbase credentials): only the ``agent-browser``
-    CLI must be findable.
+    The configured CLI backend (agent-browser or browser-use) must be findable.
+    In cloud mode, the cloud provider credentials must also be present.
 
-    In **cloud mode** (BROWSERBASE_API_KEY set): the CLI *and* both
-    ``BROWSERBASE_API_KEY`` / ``BROWSERBASE_PROJECT_ID`` must be present.
-    
     Returns:
         True if all requirements are met, False otherwise
     """
-    # The agent-browser CLI is always required
-    try:
-        _find_agent_browser()
-    except FileNotFoundError:
+    backend = _get_backend()
+    if not backend.is_available():
         return False
 
     # In cloud mode, also require provider credentials
@@ -1829,20 +1792,20 @@ if __name__ == "__main__":
     print("🌐 Browser Tool Module")
     print("=" * 40)
 
+    _backend = _get_backend()
     _cp = _get_cloud_provider()
     mode = "local" if _cp is None else f"cloud ({_cp.provider_name()})"
+    print(f"   CLI backend: {_backend.cli_name}")
     print(f"   Mode: {mode}")
-    
+
     # Check requirements
     if check_browser_requirements():
         print("✅ All requirements met")
     else:
         print("❌ Missing requirements:")
-        try:
-            _find_agent_browser()
-        except FileNotFoundError:
-            print("   - agent-browser CLI not found")
-            print("     Install: npm install -g agent-browser && agent-browser install --with-deps")
+        if not _backend.is_available():
+            print(f"   - {_backend.cli_name} CLI not found")
+            print(f"     {_backend.install_hint}")
         if _cp is not None and not _cp.is_configured():
             print(f"   - {_cp.provider_name()} credentials not configured")
             print("   Tip: remove cloud_provider from config to use free local mode instead")

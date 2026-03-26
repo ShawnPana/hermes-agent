@@ -586,7 +586,7 @@ def _print_setup_summary(config: dict, hermes_home):
     else:
         tool_status.append(("Web Search & Extract", False, "PARALLEL_API_KEY, FIRECRAWL_API_KEY, or TAVILY_API_KEY"))
 
-    # Browser tools (local Chromium or Browserbase cloud)
+    # Browser tools (local Chromium or cloud)
     import shutil
 
     _ab_found = (
@@ -595,13 +595,18 @@ def _print_setup_summary(config: dict, hermes_home):
             Path(__file__).parent.parent / "node_modules" / ".bin" / "agent-browser"
         ).exists()
     )
+    _bu_found = shutil.which("browser-use")
     if get_env_value("BROWSERBASE_API_KEY"):
         tool_status.append(("Browser Automation (Browserbase)", True, None))
+    elif get_env_value("BROWSER_USE_API_KEY"):
+        tool_status.append(("Browser Automation (Browser Use Cloud)", True, None))
+    elif _bu_found:
+        tool_status.append(("Browser Automation (local/browser-use)", True, None))
     elif _ab_found:
-        tool_status.append(("Browser Automation (local)", True, None))
+        tool_status.append(("Browser Automation (local/agent-browser)", True, None))
     else:
         tool_status.append(
-            ("Browser Automation", False, "npm install -g agent-browser")
+            ("Browser Automation", False, "npm install -g agent-browser or install browser-use CLI")
         )
 
     # FAL (image generation)

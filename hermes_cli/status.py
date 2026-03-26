@@ -241,6 +241,26 @@ def show_status(args):
     print(f"  Sudo:         {check_mark(bool(sudo_password))} {'enabled' if sudo_password else 'disabled'}")
     
     # =========================================================================
+    # Browser Configuration
+    # =========================================================================
+    print()
+    print(color("◆ Browser", Colors.CYAN, Colors.BOLD))
+
+    try:
+        _cfg = load_config()
+        _cli_backend = _cfg.get("browser", {}).get("cli_backend", "agent-browser")
+        _cloud_provider = _cfg.get("browser", {}).get("cloud_provider")
+    except Exception:
+        _cli_backend = "agent-browser"
+        _cloud_provider = None
+
+    print(f"  CLI backend:  {_cli_backend}")
+    if _cloud_provider:
+        print(f"  Cloud:        {_cloud_provider}")
+    else:
+        print(f"  Cloud:        (none — local mode)")
+
+    # =========================================================================
     # Messaging Platforms
     # =========================================================================
     print()

@@ -873,11 +873,55 @@ def _reconfigure_tool(config: dict):
     save_config(config)
 
 
+def _configure_browser_cli_backend(config: dict):
+    """Let user choose between browser CLI backends (agent-browser vs browser-use)."""
+    current_cli = config.get("browser", {}).get("cli_backend", "agent-browser")
+    cli_choices = [
+        f"agent-browser (Node.js){' [active]' if current_cli == 'agent-browser' else ''}",
+        f"browser-use (Python){' [active]' if current_cli == 'browser-use' else ''}",
+    ]
+    current_idx = 1 if current_cli == "browser-use" else 0
+    cli_idx = _prompt_choice("  Select CLI backend:", cli_choices, current_idx)
+    new_cli = "browser-use" if cli_idx == 1 else "agent-browser"
+    config.setdefault("browser", {})["cli_backend"] = new_cli
+    if new_cli != current_cli:
+        _print_success(f"  Browser CLI backend set to: {new_cli}")
+        if new_cli == "browser-use":
+            import shutil
+            if not shutil.which("browser-use"):
+                _print_warning("  browser-use CLI not found. Install with:")
+                _print_info("    curl -fsSL https://browser-use.com/cli/install_lite.sh | bash")
+    else:
+        _print_info(f"  CLI backend unchanged: {new_cli}")
+
+
 def _configure_tool_category_for_reconfig(ts_key: str, cat: dict, config: dict):
     """Reconfigure a tool category - provider selection + API key update."""
     icon = cat.get("icon", "")
     name = cat["name"]
     providers = cat["providers"]
+
+    # Browser category gets a submenu: CLI backend + browser provider
+    if ts_key == "browser":
+        print()
+        print(color(f"  --- {icon} {name} ---", Colors.CYAN))
+        print()
+        current_cli = config.get("browser", {}).get("cli_backend", "agent-browser")
+        current_cloud = config.get("browser", {}).get("cloud_provider")
+        current_provider = current_cloud or "Local Browser"
+        sub_choices = [
+            f"CLI Backend (currently: {current_cli})",
+            f"Browser Provider (currently: {current_provider})",
+            "Cancel",
+        ]
+        sub_idx = _prompt_choice("  What would you like to configure?", sub_choices, 0)
+        if sub_idx == 0:
+            _configure_browser_cli_backend(config)
+            save_config(config)
+        elif sub_idx == 1:
+            _configure_browser_provider(providers, config)
+            save_config(config)
+        return
 
     if len(providers) == 1:
         provider = providers[0]
@@ -885,28 +929,33 @@ def _configure_tool_category_for_reconfig(ts_key: str, cat: dict, config: dict):
         print(color(f"  --- {icon} {name} ({provider['name']}) ---", Colors.CYAN))
         _reconfigure_provider(provider, config)
     else:
-        print()
-        print(color(f"  --- {icon} {name} - Choose a provider ---", Colors.CYAN))
-        print()
+        _configure_browser_provider(providers, config, icon=icon, name=name)
 
-        provider_choices = []
-        for p in providers:
-            tag = f" ({p['tag']})" if p.get("tag") else ""
-            configured = ""
-            env_vars = p.get("env_vars", [])
-            if not env_vars or all(get_env_value(v["key"]) for v in env_vars):
-                if _is_provider_active(p, config):
-                    configured = " [active]"
-                elif not env_vars:
-                    configured = ""
-                else:
-                    configured = " [configured]"
-            provider_choices.append(f"{p['name']}{tag}{configured}")
 
-        default_idx = _detect_active_provider_index(providers, config)
+def _configure_browser_provider(providers: list, config: dict, icon: str = "🌐", name: str = "Browser Automation"):
+    """Show provider selection for browser or any multi-provider category."""
+    print()
+    print(color(f"  --- {icon} {name} - Choose a provider ---", Colors.CYAN))
+    print()
 
-        provider_idx = _prompt_choice("  Select provider:", provider_choices, default_idx)
-        _reconfigure_provider(providers[provider_idx], config)
+    provider_choices = []
+    for p in providers:
+        tag = f" ({p['tag']})" if p.get("tag") else ""
+        configured = ""
+        env_vars = p.get("env_vars", [])
+        if not env_vars or all(get_env_value(v["key"]) for v in env_vars):
+            if _is_provider_active(p, config):
+                configured = " [active]"
+            elif not env_vars:
+                configured = ""
+            else:
+                configured = " [configured]"
+        provider_choices.append(f"{p['name']}{tag}{configured}")
+
+    default_idx = _detect_active_provider_index(providers, config)
+
+    provider_idx = _prompt_choice("  Select provider:", provider_choices, default_idx)
+    _reconfigure_provider(providers[provider_idx], config)
 
 
 def _reconfigure_provider(provider: dict, config: dict):

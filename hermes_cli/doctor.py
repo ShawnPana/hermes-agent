@@ -453,17 +453,30 @@ def run_doctor(args):
             check_fail("daytona SDK not installed", "(pip install daytona)")
             issues.append("Install daytona SDK: pip install daytona")
 
-    # Node.js + agent-browser (for browser automation tools)
-    if shutil.which("node"):
-        check_ok("Node.js")
-        # Check if agent-browser is installed
-        agent_browser_path = PROJECT_ROOT / "node_modules" / "agent-browser"
-        if agent_browser_path.exists():
-            check_ok("agent-browser (Node.js)", "(browser automation)")
+    # Browser CLI backend
+    try:
+        from hermes_cli.config import load_config as _load_cfg
+        _cfg = _load_cfg()
+        _cli_backend = _cfg.get("browser", {}).get("cli_backend", "agent-browser")
+    except Exception:
+        _cli_backend = "agent-browser"
+
+    if _cli_backend == "browser-use":
+        if shutil.which("browser-use"):
+            check_ok("browser-use CLI", "(browser automation)")
         else:
-            check_warn("agent-browser not installed", "(run: npm install)")
+            check_warn("browser-use CLI not installed",
+                        "(run: curl -fsSL https://browser-use.com/cli/install_lite.sh | bash)")
     else:
-        check_warn("Node.js not found", "(optional, needed for browser tools)")
+        if shutil.which("node"):
+            check_ok("Node.js")
+            agent_browser_path = PROJECT_ROOT / "node_modules" / "agent-browser"
+            if agent_browser_path.exists():
+                check_ok("agent-browser (Node.js)", "(browser automation)")
+            else:
+                check_warn("agent-browser not installed", "(run: npm install)")
+        else:
+            check_warn("Node.js not found", "(optional, needed for browser tools)")
     
     # npm audit for all Node.js packages
     if shutil.which("npm"):

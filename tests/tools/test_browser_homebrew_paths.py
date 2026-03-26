@@ -257,3 +257,89 @@ class TestRunBrowserCommandPathConstruction:
         result_path = captured_env.get("PATH", "")
         assert "/opt/homebrew/bin" in result_path
         assert "/opt/homebrew/sbin" in result_path
+
+
+# ---------------------------------------------------------------------------
+# BrowserUseBackend CLI discovery
+# ---------------------------------------------------------------------------
+
+
+class TestBrowserUseBackendDiscovery:
+    """Tests for BrowserUseBackend.find_cli() discovery logic."""
+
+    def test_finds_browser_use_on_path(self):
+        from tools.browser_providers.local_cli import BrowserUseBackend
+        backend = BrowserUseBackend()
+        with patch("shutil.which", side_effect=lambda name, **kw: "/usr/local/bin/browser-use" if name == "browser-use" else None):
+            assert backend.find_cli() == "/usr/local/bin/browser-use"
+
+    def test_finds_bu_alias(self):
+        from tools.browser_providers.local_cli import BrowserUseBackend
+        backend = BrowserUseBackend()
+        with patch("shutil.which", side_effect=lambda name, **kw: "/usr/local/bin/bu" if name == "bu" else None):
+            assert backend.find_cli() == "/usr/local/bin/bu"
+
+    def test_finds_browseruse_alias(self):
+        from tools.browser_providers.local_cli import BrowserUseBackend
+        backend = BrowserUseBackend()
+        with patch("shutil.which", side_effect=lambda name, **kw: "/usr/local/bin/browseruse" if name == "browseruse" else None):
+            assert backend.find_cli() == "/usr/local/bin/browseruse"
+
+    def test_raises_when_not_found(self):
+        from tools.browser_providers.local_cli import BrowserUseBackend
+        backend = BrowserUseBackend()
+        with patch("shutil.which", return_value=None):
+            with pytest.raises(FileNotFoundError, match="browser-use CLI not found"):
+                backend.find_cli()
+
+    def test_is_available_true(self):
+        from tools.browser_providers.local_cli import BrowserUseBackend
+        backend = BrowserUseBackend()
+        with patch("shutil.which", side_effect=lambda name, **kw: "/usr/local/bin/browser-use" if name == "browser-use" else None):
+            assert backend.is_available() is True
+
+    def test_is_available_false(self):
+        from tools.browser_providers.local_cli import BrowserUseBackend
+        backend = BrowserUseBackend()
+        with patch("shutil.which", return_value=None):
+            assert backend.is_available() is False
+
+
+class TestBrowserBackendRefHandling:
+    """Tests for ref format translation between backends."""
+
+    def test_agent_browser_ref_adds_prefix(self):
+        from tools.browser_providers.local_cli import AgentBrowserBackend
+        backend = AgentBrowserBackend()
+        # Mock run_cli to avoid actual subprocess
+        with patch.object(backend, "run_cli", return_value={"success": True, "data": {}}):
+            backend.click("e5", "test")
+            backend.run_cli.assert_called_with("test", "click", ["@e5"])
+
+    def test_agent_browser_ref_keeps_prefix(self):
+        from tools.browser_providers.local_cli import AgentBrowserBackend
+        backend = AgentBrowserBackend()
+        with patch.object(backend, "run_cli", return_value={"success": True, "data": {}}):
+            backend.click("@e5", "test")
+            backend.run_cli.assert_called_with("test", "click", ["@e5"])
+
+    def test_browser_use_ref_strips_at_e_prefix(self):
+        from tools.browser_providers.local_cli import BrowserUseBackend
+        backend = BrowserUseBackend()
+        with patch.object(backend, "run_cli", return_value={"success": True, "data": {}}):
+            backend.click("@e5", "test")
+            backend.run_cli.assert_called_with("test", "click", ["5"])
+
+    def test_browser_use_ref_strips_at_prefix(self):
+        from tools.browser_providers.local_cli import BrowserUseBackend
+        backend = BrowserUseBackend()
+        with patch.object(backend, "run_cli", return_value={"success": True, "data": {}}):
+            backend.click("@5", "test")
+            backend.run_cli.assert_called_with("test", "click", ["5"])
+
+    def test_browser_use_ref_passthrough_bare_number(self):
+        from tools.browser_providers.local_cli import BrowserUseBackend
+        backend = BrowserUseBackend()
+        with patch.object(backend, "run_cli", return_value={"success": True, "data": {}}):
+            backend.click("5", "test")
+            backend.run_cli.assert_called_with("test", "click", ["5"])

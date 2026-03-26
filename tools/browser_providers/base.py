@@ -32,7 +32,7 @@ class CloudBrowserProvider(ABC):
         Must return a dict with at least::
 
             {
-                "session_name": str,   # unique name for agent-browser --session
+                "session_name": str,   # unique name for the browser CLI --session flag
                 "bb_session_id": str,  # provider session ID (for close/cleanup)
                 "cdp_url": str,        # CDP websocket URL
                 "features": dict,      # feature flags that were enabled

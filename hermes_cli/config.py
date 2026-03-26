@@ -1750,6 +1750,17 @@ def show_config():
                     parts.append(f"model={mdl}")
                 print(f"  {label:12s}  {', '.join(parts)}")
     
+    # Browser
+    print()
+    print(color("◆ Browser", Colors.CYAN, Colors.BOLD))
+    _cli_backend = config.get("browser", {}).get("cli_backend", "agent-browser")
+    _cloud_provider = config.get("browser", {}).get("cloud_provider")
+    print(f"  CLI backend:  {_cli_backend}")
+    if _cloud_provider:
+        print(f"  Cloud:        {_cloud_provider}")
+    else:
+        print(f"  Cloud:        {color('none (local mode)', Colors.DIM)}")
+
     # Messaging
     print()
     print(color("◆ Messaging Platforms", Colors.CYAN, Colors.BOLD))

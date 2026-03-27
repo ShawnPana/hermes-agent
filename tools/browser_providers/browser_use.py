@@ -39,11 +39,33 @@ class BrowserUseProvider(CloudBrowserProvider):
             "X-Browser-Use-API-Key": api_key,
         }
 
+    def _get_session_config(self) -> dict:
+        """Read session config from ``browser.providers.browser-use`` in config.yaml.
+
+        Any keys found are passed straight through to the Browser Use API
+        when creating a session.  This allows users to set ``profile_id``,
+        ``proxy_country``, ``timeout``, or any other API-supported field
+        without code changes.
+        """
+        try:
+            from pathlib import Path
+            import yaml
+            hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+            config_path = hermes_home / "config.yaml"
+            if config_path.exists():
+                with open(config_path) as f:
+                    cfg = yaml.safe_load(f) or {}
+                return dict(cfg.get("browser", {}).get("providers", {}).get("browser-use", {}) or {})
+        except Exception:
+            pass
+        return {}
+
     def create_session(self, task_id: str) -> Dict[str, object]:
+        session_config = self._get_session_config()
         response = requests.post(
             f"{_BASE_URL}/browsers",
             headers=self._headers(),
-            json={},
+            json=session_config,
             timeout=30,
         )
 
